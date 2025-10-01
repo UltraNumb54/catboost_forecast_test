@@ -1,3 +1,69 @@
+# ИСПРАВЛЕНИЕ
+
+def print_detailed_monthly_analysis(self, results_df, errors_df):
+    """Детальный анализ результатов по месяцам"""
+    print("\n=== ДЕТАЛЬНЫЙ АНАЛИЗ ПО МЕСЯЦАМ ===")
+    
+    # Анализ по месяцам
+    monthly_stats = errors_df.groupby(['month', 'month_name']).agg({
+        'percentage_error': ['mean', 'std', 'median'],
+        'exceeds_2.5_percent': 'mean',
+        'actual': 'count'
+    }).round(3)
+    
+    monthly_stats.columns = ['mean_error', 'std_error', 'median_error', 'exceeds_ratio', 'total_predictions']
+    monthly_stats['exceeds_percentage'] = (monthly_stats['exceeds_ratio'] * 100).round(2)
+    
+    print("ДЕТАЛЬНАЯ СТАТИСТИКА ПО МЕСЯЦАМ:")
+    for (month, month_name), stats in monthly_stats.iterrows():
+        print(f"   {month_name}:")
+        print(f"      Средняя ошибка: {stats['mean_error']:.2f}%")
+        print(f"      Медианная ошибка: {stats['median_error']:.2f}%")
+        print(f"      Стандартное отклонение: {stats['std_error']:.2f}%")
+        print(f"      Превысили порог 2.5%: {stats['exceeds_percentage']}%")
+        print(f"      Всего прогнозов: {stats['total_predictions']}")
+    
+    # Лучшие и худшие месяцы - ИСПРАВЛЕННАЯ ЧАСТЬ
+    # Сбрасываем индекс для правильной работы с данными
+    monthly_stats_reset = monthly_stats.reset_index()
+    
+    if len(monthly_stats_reset) > 0:
+        best_month_row = monthly_stats_reset.loc[monthly_stats_reset['mean_error'].idxmin()]
+        worst_month_row = monthly_stats_reset.loc[monthly_stats_reset['mean_error'].idxmax()]
+        
+        print(f"\nЛУЧШИЙ МЕСЯЦ:")
+        print(f"   {best_month_row['month_name']}: средняя ошибка {best_month_row['mean_error']:.2f}%, "
+              f">2.5%: {best_month_row['exceeds_percentage']}%")
+        
+        print(f"ХУДШИЙ МЕСЯЦ:")
+        print(f"   {worst_month_row['month_name']}: средняя ошибка {worst_month_row['mean_error']:.2f}%, "
+              f">2.5%: {worst_month_row['exceeds_percentage']}%")
+    else:
+        print("\nНедостаточно данных для определения лучшего/худшего месяца")
+    
+    # Сезонный анализ
+    print(f"\nСЕЗОННЫЙ АНАЛИЗ:")
+    winter_months = ['December', 'January', 'February']
+    spring_months = ['March', 'April', 'May']
+    summer_months = ['June', 'July', 'August']
+    fall_months = ['September', 'October', 'November']
+    
+    seasons = {
+        'Зима': winter_months,
+        'Весна': spring_months,
+        'Лето': summer_months,
+        'Осень': fall_months
+    }
+    
+    for season_name, months in seasons.items():
+        season_data = errors_df[errors_df['month_name'].isin(months)]
+        if len(season_data) > 0:
+            avg_error = season_data['percentage_error'].mean()
+            exceeds_pct = season_data['exceeds_2.5_percent'].mean() * 100
+            print(f"   {season_name}: ошибка {avg_error:.2f}%, >2.5%: {exceeds_pct:.1f}%")
+
+
+
 # simulation_test_2025_custom.py
 import pandas as pd
 import numpy as np
