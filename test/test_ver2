@@ -1,3 +1,86 @@
+def create_enhanced_temporal_features(df):
+    """Создание улучшенных временных признаков с акцентом на ночные/утренние часы"""
+    print("Создание улучшенных временных признаков...")
+    
+    df = df.copy()
+    
+    # Базовые временные признаки
+    df['hour'] = df['datetime'].dt.hour
+    df['dayofweek'] = df['datetime'].dt.dayofweek
+    df['month'] = df['datetime'].dt.month
+    df['dayofyear'] = df['datetime'].dt.dayofyear
+    df['year'] = df['datetime'].dt.year
+    
+    # === КРИТИЧЕСКИЕ ПЕРИОДЫ СУТОК ===
+    # Ночные часы (когда потребление минимально)
+    df['is_night'] = ((df['hour'] >= 0) & (df['hour'] <= 5)).astype(int)
+    
+    # Утренние часы (резкий рост потребления)
+    df['is_morning_peak'] = ((df['hour'] >= 6) & (df['hour'] <= 9)).astype(int)
+    
+    # Вечерние часы (вечерний пик)
+    df['is_evening_peak'] = ((df['hour'] >= 18) & (df['hour'] <= 22)).astype(int)
+    
+    # Рабочие часы
+    df['is_working_hours'] = ((df['hour'] >= 10) & (df['hour'] <= 17)).astype(int)
+    
+    # Переходные периоды (когда потребление быстро меняется)
+    df['is_transition_period'] = (
+        ((df['hour'] >= 5) & (df['hour'] <= 7)) |  # утренний переход
+        ((df['hour'] >= 22) & (df['hour'] <= 23))   # вечерний переход
+    ).astype(int)
+    
+    # === ДЕТАЛЬНОЕ РАЗБИЕНИЕ НОЧНЫХ ЧАСОВ ===
+    # Глубокая ночь (самое низкое потребление)
+    df['is_deep_night'] = ((df['hour'] >= 1) & (df['hour'] <= 4)).astype(int)
+    
+    # Раннее утро (начало роста)
+    df['is_early_morning'] = ((df['hour'] >= 5) & (df['hour'] <= 6)).astype(int)
+    
+    # === ДЕНЬ НЕДЕЛИ + ВРЕМЯ СУТОК ===
+    # Комбинированные признаки: тип дня + время суток
+    df['weekday_morning'] = ((df['dayofweek'] < 5) & (df['is_morning_peak'] == 1)).astype(int)
+    df['weekend_morning'] = ((df['dayofweek'] >= 5) & (df['is_morning_peak'] == 1)).astype(int)
+    df['weekday_evening'] = ((df['dayofweek'] < 5) & (df['is_evening_peak'] == 1)).astype(int)
+    df['weekend_evening'] = ((df['dayofweek'] >= 5) & (df['is_evening_peak'] == 1)).astype(int)
+    
+    # Сезоны
+    df['season'] = df['month'].apply(lambda x: 
+        0 if x in [12, 1, 2] else  # зима
+        1 if x in [3, 4, 5] else   # весна
+        2 if x in [6, 7, 8] else   # лето
+        3                           # осень
+    )
+    
+    # Циклическое кодирование часа (улучшенное)
+    df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
+    df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+    
+    # Дополнительное циклическое кодирование для лучшего учета утренних/вечерних переходов
+    df['hour_sin_2'] = np.sin(4 * np.pi * df['hour'] / 24)  # двойная частота
+    df['hour_cos_2'] = np.cos(4 * np.pi * df['hour'] / 24)
+    
+    # Циклическое кодирование дня недели
+    df['dayofweek_sin'] = np.sin(2 * np.pi * df['dayofweek'] / 7)
+    df['dayofweek_cos'] = np.cos(2 * np.pi * df['dayofweek'] / 7)
+    
+    # Циклическое кодирование месяца
+    df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
+    df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
+    
+    # Циклическое кодирование дня года
+    df['dayofyear_sin'] = np.sin(2 * np.pi * df['dayofyear'] / 365)
+    df['dayofyear_cos'] = np.cos(2 * np.pi * df['dayofyear'] / 365)
+    
+    print("Созданы улучшенные временные признаки с акцентом на критические периоды:")
+    print("  - Детальное разбиение суток (ночь, утро, вечер, рабочие часы)")
+    print("  - Переходные периоды (быстрое изменение потребления)")
+    print("  - Комбинированные признаки (день недели + время суток)")
+    print("  - Улучшенное циклическое кодирование")
+    
+    return df
+
+
 # ИСПРАВЛЕНИЕ
 
 def print_detailed_monthly_analysis(self, results_df, errors_df):
