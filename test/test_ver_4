@@ -1,4 +1,4 @@
-# simulation_test_2025_optimized.py
+# simulation_test_2025_optimized_v2.py
 import pandas as pd
 import numpy as np
 from catboost import CatBoostRegressor
@@ -9,7 +9,7 @@ warnings.filterwarnings('ignore')
 # === КОНСТАНТЫ ===
 MODEL_PATH = 'filtered_energy_model_2022_2024.cbm'
 PROCESSED_DATA_FILE = 'corrected_energy_data.csv'  # или 'binary_calendar_energy_data.csv'
-SIMULATION_RESULTS_PATH = 'simulation_results_optimized.pkl'
+SIMULATION_RESULTS_PATH = 'simulation_results_optimized_v2.pkl'
 
 class EnergyConsumptionSimulator:
     def __init__(self):
@@ -45,6 +45,12 @@ class EnergyConsumptionSimulator:
             self.df = self.df.sort_values('datetime').reset_index(drop=True)
             print(f"Данные загружены: {len(self.df)} записей")
             print(f"Период данных: {self.df['datetime'].min()} - {self.df['datetime'].max()}")
+            
+            # Показываем частоту данных
+            time_diff = self.df['datetime'].diff().dropna()
+            avg_interval = time_diff.mean()
+            print(f"Средний интервал между записями: {avg_interval}")
+            print(f"Частота данных: {avg_interval.total_seconds() / 3600:.2f} часа")
             
         except Exception as e:
             print(f"Ошибка загрузки данных: {e}")
@@ -82,31 +88,63 @@ class EnergyConsumptionSimulator:
         return df_custom
     
     def get_daily_8am_points(self, df_test):
-        """Получение точек в 8:00 утра для каждого дня"""
-        # Фильтруем только точки в 8:00 утра
-        df_8am = df_test[df_test['datetime'].dt.hour == 8].copy()
+        """Получение точек в 8:00 утра для каждого дня с проверкой"""
+        print("Поиск точек в 8:00 утра...")
         
-        # Убираем дубликаты по дате (оставляем только первую точку в 8:00 каждого дня)
-        df_8am['date'] = df_8am['datetime'].dt.date
-        df_8am = df_8am.drop_duplicates(subset=['date']).reset_index(drop=True)
+        # Создаем маску для 8:00 утра
+        mask_8am = (df_test['datetime'].dt.hour == 8) & (df_test['datetime'].dt.minute == 0)
+        df_8am = df_test[mask_8am].copy()
         
-        print(f"Найдено {len(df_8am)} точек в 8:00 утра")
-        print(f"Диапазон: {df_8am['datetime'].min()} - {df_8am['datetime'].max()}")
+        if len(df_8am) == 0:
+            print("Внимание: в данных нет точек в 8:00 утра!")
+            print("Проверим ближайшие временные метки к 8:00...")
+            
+            # Найдем ближайшие точки к 8:00 утра
+            df_test['hour'] = df_test['datetime'].dt.hour
+            df_test['minute'] = df_test['datetime'].dt.minute
+            df_test['time_from_8am'] = abs(df_test['hour'] - 8) * 60 + df_test['minute']
+            
+            # Берем точки с минимальным отклонением от 8:00
+            daily_groups = df_test.groupby(df_test['datetime'].dt.date)
+            closest_to_8am = []
+            
+            for date, group in daily_groups:
+                closest_idx = group['time_from_8am'].idxmin()
+                closest_to_8am.append(closest_idx)
+            
+            df_8am = df_test.loc[closest_to_8am].copy()
+            df_8am = df_8am.sort_values('datetime').reset_index(drop=True)
+            
+            print(f"Найдено {len(df_8am)} ближайших точек к 8:00 утра для {len(df_8am)} дней")
+            print(f"Примеры: {df_8am['datetime'].head().tolist()}")
+        else:
+            # Убираем дубликаты по дате (оставляем только первую точку в 8:00 каждого дня)
+            df_8am['date'] = df_8am['datetime'].dt.date
+            df_8am = df_8am.drop_duplicates(subset=['date']).reset_index(drop=True)
+            df_8am = df_8am.sort_values('datetime').reset_index(drop=True)
+            
+            print(f"Найдено {len(df_8am)} точек в 8:00 утра")
+            print(f"Диапазон: {df_8am['datetime'].min()} - {df_8am['datetime'].max()}")
         
         return df_8am
     
     def simulate_daily_forecasts(self, df_test, forecast_horizons=[24, 48, 72]):
         """Прогнозирование только в 8:00 утра для каждого дня"""
         print(f"Прогнозирование на {forecast_horizons} часов вперед")
-        print(f"Всего точек для тестирования (в 8:00 утра): {len(df_test)}")
         
         all_results = []
         detailed_errors = []
         
-        max_horizon = max(forecast_horizons)
-        
         # Получаем точки в 8:00 утра
         df_8am = self.get_daily_8am_points(df_test)
+        
+        if len(df_8am) == 0:
+            print("Нет подходящих точек для прогнозирования")
+            return pd.DataFrame(), pd.DataFrame()
+        
+        print(f"Всего точек для тестирования (в 8:00 утра): {len(df_8am)}")
+        
+        max_horizon = max(forecast_horizons)
         
         for i, row in df_8am.iterrows():
             start_date = row['datetime']
@@ -118,7 +156,8 @@ class EnergyConsumptionSimulator:
                 end_idx = start_idx + horizon
                 
                 if end_idx >= len(df_test):
-                    print(f"  Пропуск горизонта {horizon} часов - недостаточно данных")
+                    print(f"  Пропуск горизонта {horizon} часов для {start_date} - недостаточно данных")
+                    print(f"    Требуется индекс до {end_idx}, но доступен только до {len(df_test)-1}")
                     continue
                 
                 forecast_results = self._recursive_forecast(df_test, start_idx, horizon)
@@ -456,8 +495,8 @@ def main():
                 print(f"      Прогнозов: {stats[('data_points', 'count')]:.0f}")
         
         # Сохраняем статистику в CSV
-        results['detailed_errors'].to_csv('detailed_errors_optimized.csv', index=False)
-        results['simulation_results'].to_csv('forecast_results_optimized.csv', index=False)
+        results['detailed_errors'].to_csv('detailed_errors_optimized_v2.csv', index=False)
+        results['simulation_results'].to_csv('forecast_results_optimized_v2.csv', index=False)
         print(f"\nДетальные данные сохранены в CSV файлы")
         
     else:
