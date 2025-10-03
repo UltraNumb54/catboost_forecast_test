@@ -1,4 +1,4 @@
-# simulation_test_2025_optimized_v2.py
+# simulation_test_2025_optimized_v3.py
 import pandas as pd
 import numpy as np
 from catboost import CatBoostRegressor
@@ -9,7 +9,7 @@ warnings.filterwarnings('ignore')
 # === КОНСТАНТЫ ===
 MODEL_PATH = 'filtered_energy_model_2022_2024.cbm'
 PROCESSED_DATA_FILE = 'corrected_energy_data.csv'  # или 'binary_calendar_energy_data.csv'
-SIMULATION_RESULTS_PATH = 'simulation_results_optimized_v2.pkl'
+SIMULATION_RESULTS_PATH = 'simulation_results_optimized_v3.pkl'
 
 class EnergyConsumptionSimulator:
     def __init__(self):
@@ -131,6 +131,7 @@ class EnergyConsumptionSimulator:
     def simulate_daily_forecasts(self, df_test, forecast_horizons=[24, 48, 72]):
         """Прогнозирование только в 8:00 утра для каждого дня"""
         print(f"Прогнозирование на {forecast_horizons} часов вперед")
+        print(f"Всего точек в тестовых данных: {len(df_test)}")
         
         all_results = []
         detailed_errors = []
@@ -146,19 +147,23 @@ class EnergyConsumptionSimulator:
         
         max_horizon = max(forecast_horizons)
         
+        # Проверяем, достаточно ли данных для максимального горизонта
         for i, row in df_8am.iterrows():
             start_date = row['datetime']
             start_idx = df_test[df_test['datetime'] == start_date].index[0]
             
-            print(f"Обработка точки {i+1}/{len(df_8am)}: {start_date}")
+            print(f"Обработка точки {i+1}/{len(df_8am)}: {start_date} (индекс {start_idx})")
+            
+            # Проверяем, есть ли достаточно данных для всех горизонтов
+            available_data = len(df_test) - start_idx
+            print(f"  Доступно данных с этой точки: {available_data}")
             
             for horizon in forecast_horizons:
-                end_idx = start_idx + horizon
-                
-                if end_idx >= len(df_test):
-                    print(f"  Пропуск горизонта {horizon} часов для {start_date} - недостаточно данных")
-                    print(f"    Требуется индекс до {end_idx}, но доступен только до {len(df_test)-1}")
+                if horizon > available_data:
+                    print(f"  Пропуск горизонта {horizon} часов для {start_date} - недостаточно данных (требуется {horizon}, доступно {available_data})")
                     continue
+                
+                print(f"  Прогнозирование на {horizon} часов...")
                 
                 forecast_results = self._recursive_forecast(df_test, start_idx, horizon)
                 
@@ -277,6 +282,7 @@ class EnergyConsumptionSimulator:
         
         if len(results_df) == 0:
             print("Нет результатов для анализа")
+            print("Возможно, в выбранном диапазоне недостаточно данных для прогнозирования")
             return
         
         # Группируем по горизонту прогнозирования
@@ -428,6 +434,17 @@ class EnergyConsumptionSimulator:
         if df_custom is None:
             return None
         
+        # Проверяем, достаточно ли данных для максимального горизонта
+        max_horizon = max(forecast_horizons)
+        print(f"Требуется минимум {max_horizon} точек данных для максимального горизонта")
+        print(f"Доступно точек: {len(df_custom)}")
+        
+        if len(df_custom) < max_horizon:
+            print(f"ВНИМАНИЕ: недостаточно данных для прогнозирования на {max_horizon} часов!")
+            print(f"Доступно только {len(df_custom)} точек, требуется {max_horizon}")
+            print("Пожалуйста, выберите более короткий диапазон дат или более короткие горизонты прогнозирования")
+            return None
+        
         # 3. Запуск оптимизированной симуляции (только 8:00 утра)
         results_df, errors_df = self.simulate_daily_forecasts(
             df_custom, 
@@ -436,6 +453,7 @@ class EnergyConsumptionSimulator:
         
         if len(results_df) == 0:
             print("Не удалось получить результаты симуляции")
+            print("Возможно, в выбранном диапазоне недостаточно данных для прогнозирования")
             return None
         
         # 4. Анализ результатов
@@ -454,8 +472,9 @@ class EnergyConsumptionSimulator:
 def main():
     """Основная функция с выбором периода"""
     
-    start_date = '2025-01-01'
-    end_date = '2025-03-31'
+    # Используем более короткий период для тестирования
+    start_date = '2024-12-01'  # Начало декабря 2024
+    end_date = '2025-01-31'    # Конец января 2025
     
     # Прогнозы на 1, 2 и 3 дня (24, 48, 72 часа)
     forecast_horizons = [24, 48, 72]
@@ -495,12 +514,13 @@ def main():
                 print(f"      Прогнозов: {stats[('data_points', 'count')]:.0f}")
         
         # Сохраняем статистику в CSV
-        results['detailed_errors'].to_csv('detailed_errors_optimized_v2.csv', index=False)
-        results['simulation_results'].to_csv('forecast_results_optimized_v2.csv', index=False)
+        results['detailed_errors'].to_csv('detailed_errors_optimized_v3.csv', index=False)
+        results['simulation_results'].to_csv('forecast_results_optimized_v3.csv', index=False)
         print(f"\nДетальные данные сохранены в CSV файлы")
         
     else:
         print("Симуляция завершилась с ошибками")
+        print("Попробуйте использовать более короткий период или уменьшить горизонты прогнозирования")
 
 if __name__ == "__main__":
     main()
