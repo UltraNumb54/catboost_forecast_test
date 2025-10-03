@@ -1,4 +1,4 @@
-# simulation_test_2025_8am_fixed.py
+# simulation_test_2025_optimized.py
 import pandas as pd
 import numpy as np
 from catboost import CatBoostRegressor
@@ -8,16 +8,14 @@ warnings.filterwarnings('ignore')
 
 # === КОНСТАНТЫ ===
 MODEL_PATH = 'filtered_energy_model_2022_2024.cbm'
-PROCESSED_DATA_FILE = 'corrected_energy_data.csv'
-SIMULATION_RESULTS_PATH = 'simulation_results_8am_fixed.pkl'
+PROCESSED_DATA_FILE = 'corrected_energy_data.csv'  # или 'binary_calendar_energy_data.csv'
+SIMULATION_RESULTS_PATH = 'simulation_results_optimized.pkl'
 
 class EnergyConsumptionSimulator:
     def __init__(self):
         self.model = None
         self.feature_names = None
-        self.cat_features = None
         self.results = {}
-        self.df = None
         
     def load_model_and_data(self):
         """Загрузка модели и данных"""
@@ -27,15 +25,6 @@ class EnergyConsumptionSimulator:
             self.model = CatBoostRegressor()
             self.model.load_model(MODEL_PATH)
             self.feature_names = self.model.feature_names_
-            
-            # Получаем информацию о категориальных признаках из модели
-            try:
-                self.cat_features = self.model.get_cat_feature_indices()
-                print(f"Категориальные признаки (индексы): {self.cat_features}")
-            except:
-                print("Не удалось получить информацию о категориальных признаках из модели")
-                self.cat_features = []
-            
             print(f"Модель загружена: {MODEL_PATH}")
             print(f"Используется {len(self.feature_names)} признаков")
         except Exception as e:
@@ -63,163 +52,115 @@ class EnergyConsumptionSimulator:
             
         return True
     
-    def prepare_features_for_prediction(self, row):
-        """Подготовка признаков для прогнозирования с учетом категориальных признаков"""
-        try:
-            features = []
-            for i, feature_name in enumerate(self.feature_names):
-                value = row[feature_name]
-                
-                # Если признак категориальный, преобразуем в int
-                if i in self.cat_features:
-                    try:
-                        # Пробуем преобразовать в целое число
-                        if pd.isna(value):
-                            features.append(0)  # Заполняем NaN для категориальных
-                        else:
-                            features.append(int(float(value)))
-                    except:
-                        features.append(0)  # Значение по умолчанию для ошибок
-                else:
-                    # Числовые признаки оставляем как есть
-                    if pd.isna(value):
-                        features.append(0.0)  # Заполняем NaN для числовых
-                    else:
-                        features.append(float(value))
-            
-            return features
-        except Exception as e:
-            print(f"Ошибка подготовки признаков: {e}")
-            return None
-    
-    def prepare_8am_test_data(self, start_date, end_date):
-        """Подготовка тестовых данных для 8:00 утра каждого дня"""
+    def prepare_custom_test_data(self, start_date, end_date):
+        """Подготовка тестовых данных для выбранного периода"""
         print(f"Подготовка данных для периода {start_date} - {end_date}")
         
         start_date = pd.to_datetime(start_date)
         end_date = pd.to_datetime(end_date)
         
-        # Фильтруем по периоду
         mask = (self.df['datetime'] >= start_date) & (self.df['datetime'] <= end_date)
-        df_period = self.df[mask].copy()
+        df_custom = self.df[mask].copy()
         
-        if len(df_period) == 0:
+        if len(df_custom) == 0:
             print("Нет данных для выбранного периода")
             return None
         
-        print(f"Данные за период: {len(df_period)} записей")
+        print(f"Данные за выбранный период: {len(df_custom)} записей")
+        print(f"Период: {df_custom['datetime'].min()} - {df_custom['datetime'].max()}")
         
-        # Выбираем только 8:00 утра каждого дня
-        df_8am = df_period[df_period['datetime'].dt.hour == 8].copy()
-        
-        if len(df_8am) == 0:
-            print("Нет данных для 8:00 утра в выбранном периоде")
-            # Попробуем найти ближайший час к 8:00
-            print("Поиск альтернативных часов...")
-            for hour in [7, 9, 6, 10]:
-                df_alt = df_period[df_period['datetime'].dt.hour == hour].copy()
-                if len(df_alt) > 0:
-                    print(f"Найдены данные для {hour}:00 утра, используем их")
-                    df_8am = df_alt
-                    break
-            if len(df_8am) == 0:
-                return None
-        
-        print(f"Найдено {len(df_8am)} дней с данными в утренние часы")
-        print(f"Период: {df_8am['datetime'].min()} - {df_8am['datetime'].max()}")
-        
-        # Проверяем наличие всех признаков и заполняем пропуски
-        for feature in self.feature_names:
-            if feature not in df_8am.columns:
-                print(f"Отсутствующий признак: {feature}")
+        # Проверяем наличие всех признаков
+        missing_features = [f for f in self.feature_names if f not in df_custom.columns]
+        if missing_features:
+            print(f"Отсутствующие признаки: {missing_features}")
+            for feature in missing_features:
                 if feature in self.df.columns:
-                    # Для категориальных признаков используем моду, для числовых - медиану
-                    feature_idx = self.feature_names.index(feature) if feature in self.feature_names else -1
-                    if feature_idx in self.cat_features:
-                        fill_val = self.df[feature].mode()[0] if len(self.df[feature].mode()) > 0 else 0
-                        df_8am[feature] = fill_val
-                        print(f"   Заполнен категориальный {feature} модой: {fill_val}")
-                    else:
-                        median_val = self.df[feature].median()
-                        df_8am[feature] = median_val
-                        print(f"   Заполнен {feature} медианой: {median_val:.2f}")
-                else:
-                    # Если признака нет в исходных данных, заполняем нулем
-                    df_8am[feature] = 0
-                    print(f"   Заполнен {feature} нулем")
-            else:
-                # Заполняем пропуски в существующих признаках
-                if df_8am[feature].isnull().any():
-                    feature_idx = self.feature_names.index(feature) if feature in self.feature_names else -1
-                    if feature_idx in self.cat_features:
-                        fill_val = df_8am[feature].mode()[0] if len(df_8am[feature].mode()) > 0 else 0
-                        df_8am[feature] = df_8am[feature].fillna(fill_val)
-                        print(f"   Заполнены пропуски в категориальном {feature} модой: {fill_val}")
-                    else:
-                        median_val = df_8am[feature].median()
-                        df_8am[feature] = df_8am[feature].fillna(median_val)
-                        print(f"   Заполнены пропуски в {feature} медианой: {median_val:.2f}")
+                    median_val = self.df[feature].median()
+                    df_custom[feature] = median_val
+                    print(f"   Заполнен {feature} медианой: {median_val:.2f}")
+        
+        return df_custom
+    
+    def get_daily_8am_points(self, df_test):
+        """Получение точек в 8:00 утра для каждого дня"""
+        # Фильтруем только точки в 8:00 утра
+        df_8am = df_test[df_test['datetime'].dt.hour == 8].copy()
+        
+        # Убираем дубликаты по дате (оставляем только первую точку в 8:00 каждого дня)
+        df_8am['date'] = df_8am['datetime'].dt.date
+        df_8am = df_8am.drop_duplicates(subset=['date']).reset_index(drop=True)
+        
+        print(f"Найдено {len(df_8am)} точек в 8:00 утра")
+        print(f"Диапазон: {df_8am['datetime'].min()} - {df_8am['datetime'].max()}")
         
         return df_8am
     
-    def simulate_8am_forecasts(self, df_8am, forecast_days=[1, 2, 3]):
-        """Прогнозирование из точек 8:00 утра на несколько дней вперед"""
-        print(f"Прогнозирование на {forecast_days} дней вперед")
-        print(f"Всего дней для тестирования: {len(df_8am)}")
+    def simulate_daily_forecasts(self, df_test, forecast_horizons=[24, 48, 72]):
+        """Прогнозирование только в 8:00 утра для каждого дня"""
+        print(f"Прогнозирование на {forecast_horizons} часов вперед")
+        print(f"Всего точек для тестирования (в 8:00 утра): {len(df_test)}")
         
         all_results = []
         detailed_errors = []
         
-        # Создаем индекс для быстрого поиска дат
-        date_to_index = {date: idx for idx, date in enumerate(df_8am['datetime'])}
+        max_horizon = max(forecast_horizons)
         
-        successful_predictions = 0
-        failed_predictions = 0
+        # Получаем точки в 8:00 утра
+        df_8am = self.get_daily_8am_points(df_test)
         
-        for i, (idx, row) in enumerate(df_8am.iterrows()):
-            start_datetime = row['datetime']
+        for i, row in df_8am.iterrows():
+            start_date = row['datetime']
+            start_idx = df_test[df_test['datetime'] == start_date].index[0]
             
-            # Прогнозируем на все горизонты сразу
-            multi_day_results = self._multi_day_forecast(df_8am, start_datetime, date_to_index, forecast_days, row)
+            print(f"Обработка точки {i+1}/{len(df_8am)}: {start_date}")
             
-            if multi_day_results:
-                all_results.append({
-                    'start_date': start_datetime,
-                    'start_index': idx,
-                    **multi_day_results
-                })
-                successful_predictions += 1
+            for horizon in forecast_horizons:
+                end_idx = start_idx + horizon
                 
-                # Сохраняем детальные ошибки для каждого дня
-                for days in forecast_days:
-                    horizon_key = f'{days}day'
-                    if horizon_key in multi_day_results:
-                        result = multi_day_results[horizon_key]
+                if end_idx >= len(df_test):
+                    print(f"  Пропуск горизонта {horizon} часов - недостаточно данных")
+                    continue
+                
+                forecast_results = self._recursive_forecast(df_test, start_idx, horizon)
+                
+                if forecast_results:
+                    # Анализ ошибок по порогу 2.5%
+                    error_analysis = self._analyze_errors_by_threshold(
+                        forecast_results['actual_values'],
+                        forecast_results['predictions'],
+                        threshold=2.5
+                    )
+                    
+                    all_results.append({
+                        'start_date': start_date,
+                        'start_index': start_idx,
+                        'horizon_hours': horizon,
+                        'horizon_days': horizon // 24,
+                        **forecast_results,
+                        **error_analysis
+                    })
+                    
+                    # Сохраняем детальные ошибки для каждого часа
+                    for hour_idx, (actual, pred, date) in enumerate(zip(
+                        forecast_results['actual_values'],
+                        forecast_results['predictions'],
+                        forecast_results['dates']
+                    )):
                         detailed_errors.append({
-                            'start_date': start_datetime,
-                            'forecast_date': result['target_date'],
-                            'horizon_days': days,
-                            'actual': result['actual'],
-                            'predicted': result['predicted'],
-                            'absolute_error': result['absolute_error'],
-                            'percentage_error': result['percentage_error'],
-                            'exceeds_2.5_percent': result['exceeds_2.5_percent'],
-                            'month': start_datetime.month,
-                            'month_name': start_datetime.strftime('%B'),
-                            'day_of_week': start_datetime.strftime('%A')
+                            'start_date': start_date,
+                            'forecast_date': date,
+                            'horizon_days': horizon // 24,
+                            'hour_ahead': hour_idx + 1,
+                            'actual': actual,
+                            'predicted': pred,
+                            'absolute_error': abs(actual - pred),
+                            'percentage_error': abs((actual - pred) / actual) * 100 if actual != 0 else 0,
+                            'exceeds_2.5_percent': abs((actual - pred) / actual) * 100 > 2.5 if actual != 0 else False,
+                            'month': date.month,
+                            'month_name': date.strftime('%B'),
+                            'day': date.date()
                         })
-            else:
-                failed_predictions += 1
-            
-            if (i + 1) % 10 == 0:
-                print(f"Обработано {i + 1}/{len(df_8am)} дней")
         
-        print(f"Успешных прогнозов: {successful_predictions}, неудачных: {failed_predictions}")
-        
-        if len(all_results) == 0:
-            print("Нет результатов для анализа")
-            return None, None
-            
         results_df = pd.DataFrame(all_results)
         errors_df = pd.DataFrame(detailed_errors)
         
@@ -227,85 +168,85 @@ class EnergyConsumptionSimulator:
         
         return results_df, errors_df
     
-    def _multi_day_forecast(self, df_8am, start_datetime, date_to_index, forecast_days, start_row):
-        """Прогнозирование на несколько дней вперед из одной точки"""
+    def _recursive_forecast(self, df_test, start_idx, horizon):
+        """Рекурсивное прогнозирование на несколько шагов вперед"""
         try:
-            results = {}
+            predictions = []
+            actual_values = []
+            dates = []
             
-            # Подготавливаем признаки для начальной точки
-            features = self.prepare_features_for_prediction(start_row)
-            if features is None:
+            for step in range(horizon):
+                current_idx = start_idx + step
+                
+                if current_idx >= len(df_test):
+                    break
+                
+                current_features = df_test.iloc[current_idx][self.feature_names].values.reshape(1, -1)
+                prediction = self.model.predict(current_features)[0]
+                predictions.append(prediction)
+                
+                actual_value = df_test.iloc[current_idx]['consumption']
+                actual_values.append(actual_value)
+                dates.append(df_test.iloc[current_idx]['datetime'])
+            
+            if len(predictions) == 0:
                 return None
-                
-            # Преобразуем в numpy array правильного типа
-            features_array = np.array(features, dtype=object)  # object для смешанных типов
             
-            for days in forecast_days:
-                # Вычисляем целевую дату
-                target_date = start_datetime + pd.Timedelta(days=days)
-                target_date_str = target_date.strftime('%Y-%m-%d 08:00:00')
-                
-                # Ищем данные для целевой даты
-                target_mask = df_8am['datetime'] == target_date
-                target_rows = df_8am[target_mask]
-                
-                if len(target_rows) == 0:
-                    # Пропускаем, если нет данных для целевой даты
-                    continue
-                
-                target_row = target_rows.iloc[0]
-                actual_value = target_row['consumption']
-                
-                try:
-                    # Делаем прогноз для целевого дня
-                    prediction = self.model.predict(features_array)[0]
-                    
-                    # Расчет ошибок
-                    absolute_error = abs(actual_value - prediction)
-                    percentage_error = abs((actual_value - prediction) / actual_value) * 100 if actual_value != 0 else 0
-                    exceeds_threshold = percentage_error > 2.5
-                    
-                    results[f'{days}day'] = {
-                        'predicted': prediction,
-                        'actual': actual_value,
-                        'absolute_error': absolute_error,
-                        'percentage_error': percentage_error,
-                        'exceeds_2.5_percent': exceeds_threshold,
-                        'target_date': target_date
-                    }
-                    
-                except Exception as e:
-                    print(f"Ошибка предсказания для {start_datetime} на {days} дней: {e}")
-                    continue
+            mae = mean_absolute_error(actual_values, predictions)
+            mape = mean_absolute_percentage_error(actual_values, predictions) * 100
             
-            return results if results else None
+            return {
+                'predictions': predictions,
+                'actual_values': actual_values,
+                'dates': dates,
+                'mae': mae,
+                'mape': mape,
+                'data_points': len(predictions)
+            }
             
         except Exception as e:
-            print(f"Ошибка в многодневном прогнозировании для {start_datetime}: {e}")
+            print(f"Ошибка в рекурсивном прогнозировании: {e}")
             return None
+    
+    def _analyze_errors_by_threshold(self, actual_values, predictions, threshold=2.5):
+        """Анализ ошибок относительно порогового значения"""
+        errors = []
+        exceeds_threshold = 0
+        
+        for actual, pred in zip(actual_values, predictions):
+            if actual != 0:
+                percentage_error = abs((actual - pred) / actual) * 100
+                errors.append(percentage_error)
+                if percentage_error > threshold:
+                    exceeds_threshold += 1
+            else:
+                errors.append(0)
+        
+        total_points = len(actual_values)
+        exceeds_percentage = (exceeds_threshold / total_points) * 100 if total_points > 0 else 0
+        
+        return {
+            'errors_percentage': errors,
+            'exceeds_threshold_count': exceeds_threshold,
+            'exceeds_threshold_percentage': exceeds_percentage,
+            'threshold': threshold
+        }
     
     def analyze_simulation_results(self, results_df, errors_df):
         """Анализ результатов симуляции"""
         print("\nАнализ результатов симуляции")
         
-        if results_df is None or len(results_df) == 0:
+        if len(results_df) == 0:
             print("Нет результатов для анализа")
-            return None
+            return
         
         # Группируем по горизонту прогнозирования
-        horizon_stats = errors_df.groupby('horizon_days').agg({
-            'absolute_error': ['mean', 'std', 'min', 'max'],
-            'percentage_error': ['mean', 'std', 'min', 'max'],
-            'exceeds_2.5_percent': 'mean',
-            'actual': 'count'
+        horizon_stats = results_df.groupby('horizon_days').agg({
+            'mae': ['mean', 'std', 'min', 'max'],
+            'mape': ['mean', 'std', 'min', 'max'],
+            'exceeds_threshold_percentage': 'mean',
+            'data_points': 'count'
         }).round(3)
-        
-        # Переименуем столбцы для лучшей читаемости
-        horizon_stats.columns = ['mae', 'mae_std', 'mae_min', 'mae_max', 
-                                'mape', 'mape_std', 'mape_min', 'mape_max', 
-                                'exceeds_threshold_ratio', 'count']
-        
-        horizon_stats['exceeds_threshold_percentage'] = (horizon_stats['exceeds_threshold_ratio'] * 100).round(2)
         
         print("Статистика по горизонтам прогнозирования:")
         print(horizon_stats)
@@ -324,8 +265,8 @@ class EnergyConsumptionSimulator:
                   f"({stats['exceeds_percentage']}%) прогнозов превысили порог")
         
         # Общая статистика
-        overall_mae = errors_df['absolute_error'].mean()
-        overall_mape = errors_df['percentage_error'].mean()
+        overall_mae = results_df['mae'].mean()
+        overall_mape = results_df['mape'].mean()
         overall_exceeds = errors_df['exceeds_2.5_percent'].mean() * 100
         
         print(f"\nОбщие метрики:")
@@ -335,12 +276,29 @@ class EnergyConsumptionSimulator:
         print(f"   Всего прогнозов: {len(results_df)}")
         print(f"   Всего отдельных предсказаний: {len(errors_df)}")
         
+        # Анализ по дням недели
+        errors_df['day_of_week'] = errors_df['forecast_date'].dt.dayofweek
+        errors_df['day_name'] = errors_df['forecast_date'].dt.day_name()
+        
+        daily_stats = errors_df.groupby(['day_of_week', 'day_name']).agg({
+            'percentage_error': ['mean', 'count'],
+            'exceeds_2.5_percent': 'mean'
+        }).round(3)
+        
+        daily_stats.columns = ['mean_error', 'count', 'exceeds_ratio']
+        daily_stats['exceeds_percentage'] = (daily_stats['exceeds_ratio'] * 100).round(2)
+        
+        print(f"\nАнализ по дням недели:")
+        for (day_of_week, day_name), stats in daily_stats.iterrows():
+            print(f"   {day_name}: ошибка {stats['mean_error']:.2f}%, >2.5%: {stats['exceeds_percentage']}%")
+        
         # Сохраняем результаты
         self.results = {
             'simulation_results': results_df,
             'detailed_errors': errors_df,
             'horizon_stats': horizon_stats,
             'monthly_analysis': monthly_analysis,
+            'daily_analysis': daily_stats,
             'overall_metrics': {
                 'mae': overall_mae,
                 'mape': overall_mape,
@@ -352,13 +310,9 @@ class EnergyConsumptionSimulator:
         
         return self.results
     
-    def print_detailed_analysis(self, errors_df):
-        """Детальный анализ результатов"""
-        if errors_df is None or len(errors_df) == 0:
-            print("Нет данных для детального анализа")
-            return
-            
-        print("\nДетальный анализ по месяцам:")
+    def print_detailed_monthly_analysis(self, results_df, errors_df):
+        """Детальный анализ результатов по месяцам"""
+        print("\nДетальный анализ по месяцам")
         
         # Анализ по месяцам
         monthly_stats = errors_df.groupby(['month', 'month_name']).agg({
@@ -379,119 +333,135 @@ class EnergyConsumptionSimulator:
             print(f"      Превысили порог 2.5%: {stats['exceeds_percentage']}%")
             print(f"      Всего прогнозов: {stats['total_predictions']}")
         
-        # Анализ по дням недели
-        print(f"\nАнализ по дням недели:")
-        day_stats = errors_df.groupby('day_of_week').agg({
-            'percentage_error': 'mean',
-            'exceeds_2.5_percent': 'mean'
-        }).round(3)
+        # Лучшие и худшие месяцы
+        monthly_stats_reset = monthly_stats.reset_index()
         
-        for day, stats in day_stats.iterrows():
-            exceeds_pct = stats['exceeds_2.5_percent'] * 100
-            print(f"   {day}: ошибка {stats['percentage_error']:.2f}%, >2.5%: {exceeds_pct:.1f}%")
+        if len(monthly_stats_reset) > 0:
+            best_month_idx = monthly_stats_reset['mean_error'].idxmin()
+            worst_month_idx = monthly_stats_reset['mean_error'].idxmax()
+            
+            best_month_row = monthly_stats_reset.loc[best_month_idx]
+            worst_month_row = monthly_stats_reset.loc[worst_month_idx]
+            
+            print(f"\nЛучший месяц:")
+            print(f"   {best_month_row['month_name']}: средняя ошибка {best_month_row['mean_error']:.2f}%, "
+                  f">2.5%: {best_month_row['exceeds_percentage']}%")
+            
+            print(f"Худший месяц:")
+            print(f"   {worst_month_row['month_name']}: средняя ошибка {worst_month_row['mean_error']:.2f}%, "
+                  f">2.5%: {worst_month_row['exceeds_percentage']}%")
+        else:
+            print("\nНедостаточно данных для определения лучшего/худшего месяца")
+        
+        # Сезонный анализ
+        print(f"\nСезонный анализ:")
+        winter_months = ['December', 'January', 'February']
+        spring_months = ['March', 'April', 'May']
+        summer_months = ['June', 'July', 'August']
+        fall_months = ['September', 'October', 'November']
+        
+        seasons = {
+            'Зима': winter_months,
+            'Весна': spring_months,
+            'Лето': summer_months,
+            'Осень': fall_months
+        }
+        
+        for season_name, months in seasons.items():
+            season_data = errors_df[errors_df['month_name'].isin(months)]
+            if len(season_data) > 0:
+                avg_error = season_data['percentage_error'].mean()
+                exceeds_pct = season_data['exceeds_2.5_percent'].mean() * 100
+                print(f"   {season_name}: ошибка {avg_error:.2f}%, >2.5%: {exceeds_pct:.1f}%")
     
-    def run_8am_simulation(self, start_date, end_date, forecast_days=[1, 2, 3]):
-        """Запуск симуляции из точек 8:00 утра"""
-        print("=" * 60)
-        print("ЗАПУСК СИМУЛЯЦИИ ИЗ ТОЧЕК 8:00 УТРА")
-        print("=" * 60)
+    def run_custom_period_simulation(self, start_date, end_date, forecast_horizons=[24, 48, 72]):
+        """Запуск симуляции для выбранного периода"""
+        print("Запуск симуляции для выбранного периода")
         print(f"Период: {start_date} - {end_date}")
-        print(f"Горизонты прогнозирования: {forecast_days} дней")
+        print(f"Горизонты прогнозирования: {forecast_horizons} часов")
         
         # 1. Загрузка модели и данных
         if not self.load_model_and_data():
-            print("Ошибка: не удалось загрузить модель или данные")
             return None
         
-        # 2. Подготовка тестовых данных для 8:00 утра
-        df_8am = self.prepare_8am_test_data(start_date, end_date)
-        if df_8am is None:
-            print("Ошибка: не удалось подготовить данные для анализа")
+        # 2. Подготовка тестовых данных для выбранного периода
+        df_custom = self.prepare_custom_test_data(start_date, end_date)
+        if df_custom is None:
             return None
         
-        # 3. Запуск симуляции из точек 8:00 утра
-        results_df, errors_df = self.simulate_8am_forecasts(
-            df_8am, 
-            forecast_days=forecast_days
+        # 3. Запуск оптимизированной симуляции (только 8:00 утра)
+        results_df, errors_df = self.simulate_daily_forecasts(
+            df_custom, 
+            forecast_horizons=forecast_horizons
         )
         
-        if results_df is None:
-            print("Ошибка: не удалось получить результаты симуляции")
+        if len(results_df) == 0:
+            print("Не удалось получить результаты симуляции")
             return None
         
         # 4. Анализ результатов
-        results = self.analyze_simulation_results(results_df, errors_df)
-        if results is None:
-            print("Ошибка: не удалось проанализировать результаты")
-            return None
+        self.analyze_simulation_results(results_df, errors_df)
         
-        # 5. Детальный анализ
-        self.print_detailed_analysis(errors_df)
+        # 5. Детальный анализ по месяцам
+        self.print_detailed_monthly_analysis(results_df, errors_df)
         
         # 6. Сохранение результатов
-        try:
-            import joblib
-            joblib.dump(self.results, SIMULATION_RESULTS_PATH)
-            print(f"\nРезультаты симуляции сохранены в {SIMULATION_RESULTS_PATH}")
-        except Exception as e:
-            print(f"Ошибка сохранения результатов: {e}")
+        import joblib
+        joblib.dump(self.results, SIMULATION_RESULTS_PATH)
+        print(f"\nРезультаты симуляции сохранены в {SIMULATION_RESULTS_PATH}")
         
         return self.results
 
 def main():
-    """Основная функция"""
-    # Настройки симуляции
+    """Основная функция с выбором периода"""
+    
     start_date = '2025-01-01'
     end_date = '2025-03-31'
-    forecast_days = [1, 2, 3]
     
-    print(f"\nНАСТРОЙКИ СИМУЛЯЦИИ:")
+    # Прогнозы на 1, 2 и 3 дня (24, 48, 72 часа)
+    forecast_horizons = [24, 48, 72]
+    
+    print(f"\nНастройки симуляции:")
     print(f"   Период: {start_date} - {end_date}")
-    print(f"   Горизонты: {forecast_days} дней")
-    print(f"   Время прогнозирования: 8:00 утра каждого дня")
-    print()
+    print(f"   Горизонты: {forecast_horizons} часов (1, 2 и 3 дня)")
     
     # Создаем и запускаем симулятор
     simulator = EnergyConsumptionSimulator()
-    results = simulator.run_8am_simulation(
+    results = simulator.run_custom_period_simulation(
         start_date=start_date,
         end_date=end_date,
-        forecast_days=forecast_days
+        forecast_horizons=forecast_horizons
     )
     
     if results is not None:
-        print("\n" + "=" * 50)
-        print("СИМУЛЯЦИЯ УСПЕШНО ЗАВЕРШЕНА!")
-        print("=" * 50)
+        print("\nСимуляция успешно завершена!")
         
         overall_metrics = results['overall_metrics']
-        print(f"ИТОГОВЫЕ РЕЗУЛЬТАТЫ ДЛЯ ПЕРИОДА {start_date} - {end_date}:")
+        print(f"Итоговые результаты для периода {start_date} - {end_date}:")
         print(f"   Средний MAE: {overall_metrics['mae']:.3f}")
         print(f"   Средний MAPE: {overall_metrics['mape']:.2f}%")
         print(f"   Прогнозов с ошибкой > 2.5%: {overall_metrics['exceeds_threshold_percentage']:.2f}%")
         print(f"   Всего выполнено прогнозов: {overall_metrics['total_forecasts']}")
         print(f"   Всего отдельных предсказаний: {overall_metrics['total_predictions']}")
         
-        # Сохраняем статистику в CSV
-        try:
-            results['detailed_errors'].to_csv('detailed_errors_8am_fixed.csv', index=False)
-            results['simulation_results'].to_csv('forecast_results_8am_fixed.csv', index=False)
-            print(f"\nДетальные данные сохранены в CSV файлы")
-        except Exception as e:
-            print(f"Ошибка сохранения CSV: {e}")
+        # Дополнительная статистика по горизонтам
+        print(f"\nДетализация по горизонтам прогнозирования:")
+        horizon_stats = results['horizon_stats']
+        for horizon in [1, 2, 3]:
+            if horizon in horizon_stats.index:
+                stats = horizon_stats.loc[horizon]
+                print(f"   {horizon} день:")
+                print(f"      MAE: {stats[('mae', 'mean')]:.3f} ± {stats[('mae', 'std')]:.3f}")
+                print(f"      MAPE: {stats[('mape', 'mean')]:.2f}% ± {stats[('mape', 'std')]:.2f}%")
+                print(f"      Прогнозов: {stats[('data_points', 'count')]:.0f}")
         
-        # Статистика по горизонтам
-        print(f"\nСТАТИСТИКА ПО ДНЯМ ПРОГНОЗИРОВАНИЯ:")
-        for days in forecast_days:
-            day_data = results['detailed_errors'][results['detailed_errors']['horizon_days'] == days]
-            if len(day_data) > 0:
-                mape = day_data['percentage_error'].mean()
-                exceeds_pct = day_data['exceeds_2.5_percent'].mean() * 100
-                count = len(day_data)
-                print(f"   {days} день: MAPE {mape:.2f}%, >2.5%: {exceeds_pct:.1f}%, прогнозов: {count}")
+        # Сохраняем статистику в CSV
+        results['detailed_errors'].to_csv('detailed_errors_optimized.csv', index=False)
+        results['simulation_results'].to_csv('forecast_results_optimized.csv', index=False)
+        print(f"\nДетальные данные сохранены в CSV файлы")
         
     else:
-        print("\nСимуляция завершилась с ошибками")
+        print("Симуляция завершилась с ошибками")
 
 if __name__ == "__main__":
     main()
